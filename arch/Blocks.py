@@ -4,11 +4,13 @@ This repository is used to implement all blocks and tools for Efficient SR
     LI Zehyuan from SIAT
     LIU yingqi from SIAT
 '''
+from functools import partial
 
 import torch
 import torch.nn as nn
 import math
 import torch.nn.functional as F
+from distutils.version import LooseVersion
 
 # Depthwise Separable Convolution
 class DepthWiseConv(nn.Module):
@@ -150,7 +152,7 @@ class ChannelReplicate(nn.Module):
     def __init__(self, factor=3):
         super(ChannelReplicate, self).__init__()
         self.factor = factor
-        
+
     def forward(self, input):
         template = input
         for i in range(0, self.factor-1):
@@ -286,3 +288,12 @@ class ShuffleV2Block(nn.Module):
         x = x.permute(1, 0, 2)
         x = x.reshape(2, -1, num_channels // 2, height, width)
         return x[0], x[1]
+# Performer
+# for simpler you can just import and use like below
+# from performer_pytorch import FastAttention
+# https://github.com/lucidrains/performer-pytorch for more details
+
+
+
+
+# Linear Transformer
