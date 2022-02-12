@@ -11,6 +11,7 @@ import torch.nn as nn
 import math
 from distutils.version import LooseVersion
 
+
 # Depthwise Separable Convolution
 class DepthWiseConv(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -38,7 +39,7 @@ class DepthWiseConv(nn.Module):
 # Blueprint Separable Convolutions
 # BN will be replaced by LN
 class BSConvU(torch.nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True, padding_mode="zeros", with_bn=False, bn_kwargs=None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True, padding_mode="zeros", with_norm=False, bn_kwargs=None):
         super().__init__()
 
         # check arguments
@@ -58,8 +59,8 @@ class BSConvU(torch.nn.Sequential):
         ))
 
         # batchnorm
-        if with_bn:
-            self.add_module("bn", torch.nn.BatchNorm2d(num_features=out_channels, **bn_kwargs))
+        if with_norm:
+            self.add_module("ln", torch.nn.LayerNorm(out_channels, **bn_kwargs))
 
         # depthwise
         self.add_module("dw", torch.nn.Conv2d(
@@ -76,7 +77,8 @@ class BSConvU(torch.nn.Sequential):
 
 
 class BSConvS(torch.nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True, padding_mode="zeros", p=0.25, min_mid_channels=4, with_bn=False, bn_kwargs=None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True,
+                 padding_mode="zeros", p=0.25, min_mid_channels=4, with_bn=False, bn_kwargs=None):
         super().__init__()
 
         # check arguments
@@ -99,7 +101,7 @@ class BSConvS(torch.nn.Sequential):
 
         # batchnorm
         if with_bn:
-            self.add_module("bn1", torch.nn.BatchNorm2d(num_features=mid_channels, **bn_kwargs))
+            self.add_module("ln1", torch.nn.LayerNorm(out_channels, **bn_kwargs))
 
         # pointwise 2
         self.add_module("pw2", torch.nn.Conv2d(
@@ -115,7 +117,7 @@ class BSConvS(torch.nn.Sequential):
 
         # batchnorm
         if with_bn:
-            self.add_module("bn2", torch.nn.BatchNorm2d(num_features=out_channels, **bn_kwargs))
+            self.add_module("ln2", torch.nn.LayerNorm(out_channels, **bn_kwargs))
 
         # depthwise
         self.add_module("dw", torch.nn.Conv2d(
@@ -168,3 +170,116 @@ class ChannelReplicate(nn.Module):
 
 
 # Linear Transformer
+# https://github.com/idiap/fast-transformers
+# Linear Transformer
+class FeatureMap(nn.Module):
+    """Define the FeatureMap interface."""
+    def __init__(self, query_dims):
+        super().__init__()
+        self.query_dims = query_dims
+
+    def new_feature_map(self, device):
+        """Create a new instance of this feature map. In particular, if it is a
+        random feature map sample new parameters."""
+        raise NotImplementedError()
+
+    def forward_queries(self, x):
+        """Encode the queries `x` using this feature map."""
+        return self(x)
+
+    def forward_keys(self, x):
+        """Encode the keys `x` using this feature map."""
+        return self(x)
+
+    def forward(self, x):
+        """Encode x using this feature map. For symmetric feature maps it
+        suffices to define this function, but for asymmetric feature maps one
+        needs to define the `forward_queries` and `forward_keys` functions."""
+        raise NotImplementedError()
+
+    @classmethod
+    def factory(cls, *args, **kwargs):
+        """Return a function that when called with the query dimensions returns
+        an instance of this feature map.
+        It is inherited by the subclasses so it is available in all feature
+        maps.
+        """
+        def inner(query_dims):
+            return cls(query_dims, *args, **kwargs)
+        return inner
+
+
+class ActivationFunctionFeatureMap(FeatureMap):
+    """Define a feature map that is simply an element-wise activation
+    function."""
+    def __init__(self, query_dims, activation_function):
+        super().__init__(query_dims)
+        self.activation_function = activation_function
+
+    def new_feature_map(self, device):
+        return
+
+    def forward(self, x):
+        return self.activation_function(x)
+
+
+class LinearAttention(nn.Module):
+    """Implement unmasked attention using dot product of feature maps in
+    O(N D^2) complexity.
+    Given the queries, keys and values as Q, K, V instead of computing
+        V' = softmax(Q.mm(K.t()), dim=-1).mm(V),
+    we make use of a feature map function Φ(.) and perform the following
+    computation
+        V' = normalize(Φ(Q).mm(Φ(K).t())).mm(V).
+    The above can be computed in O(N D^2) complexity where D is the
+    dimensionality of Q, K and V and N is the sequence length. Depending on the
+    feature map, however, the complexity of the attention might be limited.
+    Arguments
+    ---------
+        feature_map: callable, a callable that applies the feature map to the
+                     last dimension of a tensor (default: elu(x)+1)
+        eps: float, a small number to ensure the numerical stability of the
+             denominator (default: 1e-6)
+        event_dispatcher: str or EventDispatcher instance to be used by this
+                          module for dispatching events (default: the default
+                          global dispatcher)
+    """
+    def __init__(self, query_dimensions, feature_map=None, eps=1e-6,
+                 event_dispatcher=""):
+        super(LinearAttention, self).__init__()
+        elu_feature_map = ActivationFunctionFeatureMap.factory(
+            lambda x: torch.nn.functional.elu(x) + 1
+        )
+        self.feature_map = (
+            feature_map(query_dimensions) if feature_map else
+            elu_feature_map(query_dimensions)
+        )
+        self.eps = eps
+        # self.event_dispatcher = EventDispatcher.get(event_dispatcher)
+
+    def forward(self, queries, keys, values, attn_mask, query_lengths,
+                key_lengths):
+        # Apply the feature map to the queries and keys
+        self.feature_map.new_feature_map(queries.device)
+        Q = self.feature_map.forward_queries(queries)
+        K = self.feature_map.forward_keys(keys)
+
+        # Apply the key padding mask and make sure that the attn_mask is
+        # all_ones
+        if not attn_mask.all_ones:
+            raise RuntimeError(("LinearAttention does not support arbitrary "
+                                "attention masks"))
+        K = K * key_lengths.float_matrix[:, :, None, None]
+
+        # Compute the KV matrix, namely the dot product of keys and values so
+        # that we never explicitly compute the attention matrix and thus
+        # decrease the complexity
+        KV = torch.einsum("nshd,nshm->nhmd", K, values)
+
+        # Compute the normalizer
+        Z = 1/(torch.einsum("nlhd,nhd->nlh", Q, K.sum(dim=1))+self.eps)
+
+        # Finally compute and return the new values
+        V = torch.einsum("nlhd,nhmd,nlh->nlhm", Q, KV, Z)
+
+        return V.contiguous()

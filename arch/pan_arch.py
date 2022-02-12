@@ -8,6 +8,9 @@ import numpy as np
 
 
 # for RCAN
+from basicsr.utils.registry import ARCH_REGISTRY
+
+
 def default_conv(in_channels, out_channels, kernel_size, bias=True):
     return nn.Conv2d(
         in_channels, out_channels, kernel_size,
@@ -198,6 +201,7 @@ class SCPA(nn.Module):
         return out
 
 
+@ARCH_REGISTRY.register()
 class PAN(nn.Module):
 
     def __init__(self, in_nc=3, out_nc=3, nf=40, unf=24, nb=16, scale=4):
