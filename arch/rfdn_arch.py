@@ -1,3 +1,4 @@
+import functools
 import math
 
 import torch
@@ -140,10 +141,10 @@ class ESA(nn.Module):
         self.conv1 = nn.Conv2d(num_feat, f, 1, 1, 0)
         self.conv_f = nn.Conv2d(f, f, 1, 1, 0)
         self.maxPooling = nn.MaxPool2d(kernel_size=7, stride=3)
-        self.conv_max = conv(f, f, **BSConvS_kwargs)
+        self.conv_max = conv(f, f, kernel_size=3, **BSConvS_kwargs)
         self.conv2 = nn.Conv2d(f, f, 3, 2, 0)
-        self.conv3 = conv(f, f, **BSConvS_kwargs)
-        self.conv3_ = conv(f, f, **BSConvS_kwargs)
+        self.conv3 = conv(f, f, kernel_size=3, **BSConvS_kwargs)
+        self.conv3_ = conv(f, f, kernel_size=3, **BSConvS_kwargs)
         self.conv4 = nn.Conv2d(f, num_feat, 1, 1, 0)
         self.sigmoid = nn.Sigmoid()
         self.GELU = nn.GELU()
@@ -169,17 +170,18 @@ class RFDB(nn.Module):
         BSConvS_kwargs = {}
         if conv.__name__ == 'BSConvS':
             BSConvS_kwargs = {'p': p}
+
         self.dc = self.distilled_channels = in_channels // 2
         self.rc = self.remaining_channels = in_channels
 
         self.c1_d = nn.Conv2d(in_channels, self.dc, 1, 1, 0)
-        self.c1_r = conv(in_channels, self.rc, **BSConvS_kwargs)
+        self.c1_r = conv(in_channels, self.rc, kernel_size=3,  **BSConvS_kwargs)
         self.c2_d = nn.Conv2d(self.remaining_channels, self.dc, 1, 1, 0)
-        self.c2_r = conv(self.remaining_channels, self.rc, **BSConvS_kwargs)
+        self.c2_r = conv(self.remaining_channels, self.rc, kernel_size=3, **BSConvS_kwargs)
         self.c3_d = nn.Conv2d(self.remaining_channels, self.dc, 1, 1, 0)
-        self.c3_r = conv(self.remaining_channels, self.rc, **BSConvS_kwargs)
+        self.c3_r = conv(self.remaining_channels, self.rc, kernel_size=3, **BSConvS_kwargs)
 
-        self.c4 = conv(self.remaining_channels, self.dc, **BSConvS_kwargs)
+        self.c4 = conv(self.remaining_channels, self.dc, kernel_size=3, **BSConvS_kwargs)
         self.act = nn.GELU()
 
         self.c5 = nn.Conv2d(self.dc * 4, in_channels, 1, 1, 0)
@@ -207,11 +209,19 @@ class RFDB(nn.Module):
         return out_fused
 
 
+def make_layer(block, n_layers):
+    layers = []
+    for _ in range(n_layers):
+        layers.append(block())
+    return nn.Sequential(*layers)
+
+
 @ARCH_REGISTRY.register()
 class RFDN(nn.Module):
     def __init__(self, num_in_ch=3, num_feat=50, num_block=4, num_out_ch=3, upscale=4, conv='DepthWiseConv', p=0.25):
         super(RFDN, self).__init__()
         self.fea_conv = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
+        print(conv)
         if conv == 'DepthWiseConv':
             self.conv = DepthWiseConv
         elif conv == 'BSConvU':
@@ -220,10 +230,13 @@ class RFDN(nn.Module):
             self.conv = BSConvS
         else:
             self.conv = nn.Conv2d
+        # RFDB_block_f = functools.partial(RFDB, in_channels=num_feat, conv=self.conv, p=p)
+        # RFDB_trunk = make_layer(RFDB_block_f, num_block)
         self.B1 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
         self.B2 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
         self.B3 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
         self.B4 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
+
 
         self.c1 = nn.Conv2d(num_feat * num_block, num_feat, 1, 1, 0)
         self.GELU = nn.GELU()
