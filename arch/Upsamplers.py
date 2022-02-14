@@ -28,13 +28,13 @@ class PA(nn.Module):
 
 
 class PA_UP(nn.Module):
-    def __init__(self, nf, unf, out_nc):
+    def __init__(self, nf, unf, out_nc, scale=4):
         super(PA_UP, self).__init__()
         self.upconv1 = nn.Conv2d(nf, unf, 3, 1, 1, bias=True)
         self.att1 = PA(unf)
         self.HRconv1 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
 
-        if self.scale == 4:
+        if scale == 4:
             self.upconv2 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
             self.att2 = PA(unf)
             self.HRconv2 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
@@ -49,6 +49,7 @@ class PA_UP(nn.Module):
         fea = self.upconv2(F.interpolate(fea, scale_factor=2, mode='nearest'))
         fea = self.lrelu(self.att2(fea))
         fea = self.lrelu(self.HRconv2(fea))
+        fea = self.conv_last(fea)
         return fea
 
 
