@@ -105,9 +105,11 @@ def make_layer(block, n_layers):
 @ARCH_REGISTRY.register()
 class RFDN(nn.Module):
     def __init__(self, num_in_ch=3, num_feat=50, num_block=4, num_out_ch=3, upscale=4,
-                 conv='DepthWiseConv', upsampler= 'pixelshuffledirect', p=0.25):
+                 conv='DepthWiseConv', upsampler='pixelshuffledirect', p=0.25):
         super(RFDN, self).__init__()
-        self.fea_conv = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
+        kwargs = {'padding': 1}
+        if conv == 'BSConvS':
+            kwargs = {'p': p}
         print(conv)
         if conv == 'DepthWiseConv':
             self.conv = Blocks.DepthWiseConv
@@ -117,6 +119,8 @@ class RFDN(nn.Module):
             self.conv = Blocks.BSConvS
         else:
             self.conv = nn.Conv2d
+        self.fea_conv = self.conv(num_in_ch, num_feat, kernel_size=3, **kwargs)
+
         # RFDB_block_f = functools.partial(RFDB, in_channels=num_feat, conv=self.conv, p=p)
         # RFDB_trunk = make_layer(RFDB_block_f, num_block)
         self.B1 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
@@ -127,10 +131,10 @@ class RFDN(nn.Module):
         self.B6 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
         # self.B7 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
 
-        self.c1 = nn.Conv2d(num_feat * num_block, num_feat, 1, 1, 0)
+        self.c1 = nn.Linear(num_feat * num_block, num_feat)
         self.GELU = nn.GELU()
 
-        self.c2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+        self.c2 = self.conv(num_feat, num_feat, kernel_size=3, **kwargs)
 
 
         if upsampler == 'pixelshuffledirect':
@@ -153,10 +157,10 @@ class RFDN(nn.Module):
         out_B5 = self.B5(out_B4)
         out_B6 = self.B6(out_B5)
         # out_B7 = self.B7(out_B6)
-
-        out_B = self.c1(torch.cat([out_B1, out_B2, out_B3, out_B4, out_B5, out_B6], dim=1))
-        out_B = self.GELU(out_B)
-
+        trunk = torch.cat([out_B1, out_B2, out_B3, out_B4, out_B5, out_B6], dim=1)
+        out_B = self.c1(trunk.permute(0, 2, 3, 1))
+        out_B = self.GELU(out_B.permute(0, 3, 1, 2))
+        # print(out_B.shape)
         out_lr = self.c2(out_B) + out_fea
 
         # output = self.c3(out_lr)
