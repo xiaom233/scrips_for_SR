@@ -1,285 +1,18 @@
-import functools
-import math
-
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
-from basicsr.utils.registry import ARCH_REGISTRY
-
-
 '''
 This repository is used to implement all upsamplers(only x4) and tools for Efficient SR
 @author
     LI Zehyuan from SIAT
     LIU yingqi from SIAT
 '''
+
 from functools import partial
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-
-
-class PA(nn.Module):
-    '''PA is pixel attention'''
-
-    def __init__(self, nf):
-        super(PA, self).__init__()
-        self.conv = nn.Conv2d(nf, nf, 1)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        y = self.conv(x)
-        y = self.sigmoid(y)
-        out = torch.mul(x, y)
-
-        return out
-
-
-class PA_UP(nn.Module):
-    def __init__(self, nf, unf, out_nc, scale=4):
-        super(PA_UP, self).__init__()
-        self.upconv1 = nn.Conv2d(nf, unf, 3, 1, 1, bias=True)
-        self.att1 = PA(unf)
-        self.HRconv1 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
-
-        if scale == 4:
-            self.upconv2 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
-            self.att2 = PA(unf)
-            self.HRconv2 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
-
-        self.conv_last = nn.Conv2d(unf, out_nc, 3, 1, 1, bias=True)
-        self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
-
-    def forward(self, fea):
-        fea = self.upconv1(F.interpolate(fea, scale_factor=2, mode='nearest'))
-        fea = self.lrelu(self.att1(fea))
-        fea = self.lrelu(self.HRconv1(fea))
-        fea = self.upconv2(F.interpolate(fea, scale_factor=2, mode='nearest'))
-        fea = self.lrelu(self.att2(fea))
-        fea = self.lrelu(self.HRconv2(fea))
-        fea = self.conv_last(fea)
-        return fea
-
-
-class UpsampleOneStep(nn.Sequential):
-    """UpsampleOneStep module (the difference with Upsample is that it always only has 1conv + 1pixelshuffle)
-       Used in lightweight SR to save parameters.
-    Args:
-        scale (int): Scale factor. Supported scales: 2^n and 3.
-        num_feat (int): Channel number of intermediate features.
-    """
-
-    def __init__(self, scale, num_feat, num_out_ch, input_resolution=None):
-        self.num_feat = num_feat
-        self.input_resolution = input_resolution
-        m = []
-        m.append(nn.Conv2d(num_feat, (scale**2) * num_out_ch, 3, 1, 1))
-        m.append(nn.PixelShuffle(scale))
-        super(UpsampleOneStep, self).__init__(*m)
-
-    def flops(self):
-        h, w = self.input_resolution
-        flops = h * w * self.num_feat * 3 * 9
-        return flops
-
-
-class PixelShuffleDirect(nn.Module):
-    def __init__(self, scale, num_feat, num_out_ch, input_resolution=None):
-        super(PixelShuffleDirect, self).__init__()
-        self.upsampleOneStep = UpsampleOneStep(scale, num_feat, num_out_ch, input_resolution=None)
-
-    def forward(self, x):
-        return self.upsampleOneStep(x)
-
-
-class PixelShuffleBlcok(nn.Module):
-    def __init__(self, in_feat, num_feat, num_out_ch):
-        super(PixelShuffleBlcok, self).__init__()
-        self.conv_before_upsample = nn.Sequential(
-            nn.Conv2d(in_feat, num_feat, 3, 1, 1), nn.LeakyReLU(inplace=True))
-        self.upsample = nn.Sequential(
-            nn.Conv2d(num_feat, 4 * num_feat, 3, 1, 1),
-            nn.PixelShuffle(2),
-            nn.Conv2d(num_feat, 4 * num_feat, 3, 1, 1),
-            nn.PixelShuffle(2)
-        )
-        self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
-
-    def forward(self, x):
-        x = self.conv_before_upsample(x)
-        x = self.conv_last(self.upsample(x))
-        return x
-
-
-class NearestConv(nn.Module):
-    def __init__(self, in_ch, num_feat, num_out_ch):
-        super(NearestConv, self).__init__()
-        self.conv_before_upsample = nn.Sequential(
-            nn.Conv2d(in_ch, num_feat, 3, 1, 1), nn.LeakyReLU(inplace=True))
-        self.conv_up1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_hr = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
-        self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
-
-    def forward(self, x):
-        x = self.conv_before_upsample(x)
-        x = self.lrelu(self.conv_up1(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
-        x = self.lrelu(self.conv_up2(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
-        x = self.conv_last(self.lrelu(self.conv_hr(x)))
-        return x
-
-
-# 1*1卷积使用nn.Linear实现
-class DepthWiseConv(nn.Module):
-    def __init__(self, in_ch, out_ch, kernel_size=3, stride=1, padding=1,
-                 dilation=1, bias=True, padding_mode="zeros", with_norm=True, bn_kwargs=None):
-        super(DepthWiseConv, self).__init__()
-        # 也相当于分组为1的分组卷积
-        self.depth_conv = nn.Conv2d(in_channels=in_ch,
-                                    out_channels=in_ch,
-                                    kernel_size=3,
-                                    stride=1,
-                                    padding=1,
-                                    groups=in_ch)
-        self.point_conv = nn.Linear(in_ch, out_ch)
-        # self.point_conv = nn.Conv2d(in_channels=in_ch,
-        #                             out_channels=out_ch,
-        #                             kernel_size=1,
-        #                             stride=1,
-        #                             padding=0,
-        #                             groups=1)
-
-    def forward(self, input):
-        out = self.depth_conv(input)
-        out = out.permute(0, 2, 3, 1)
-        out = self.point_conv(out)
-        out = out.permute(0, 3, 1, 2)
-        return out
-
-
-class BSConvU(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1,
-                 dilation=1, bias=True, padding_mode="zeros", with_ln=True, bn_kwargs=None):
-        super().__init__()
-        self.with_ln = with_ln
-        # check arguments
-        if bn_kwargs is None:
-            bn_kwargs = {}
-
-        # pointwise
-        self.pw = nn.Linear(in_channels, out_channels)
-        # self.pw=torch.nn.Conv2d(
-        #         in_channels=in_channels,
-        #         out_channels=out_channels,
-        #         kernel_size=(1, 1),
-        #         stride=1,
-        #         padding=0,
-        #         dilation=1,
-        #         groups=1,
-        #         bias=False,
-        # )
-        # batchnorm
-        if with_ln:
-            self.ln = torch.nn.LayerNorm(out_channels, **bn_kwargs)
-
-        # depthwise
-        self.dw = torch.nn.Conv2d(
-                in_channels=out_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=out_channels,
-                bias=bias,
-                padding_mode=padding_mode,
-        )
-
-    def forward(self, fea):
-        fea = fea.permute(0, 2, 3, 1)
-        fea = self.pw(fea)
-        if self.with_ln:
-            fea = self.ln(fea)
-        fea = self.dw(fea.permute(0, 3, 1, 2))
-        return fea
-
-
-class BSConvS(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, bias=True,
-                 padding_mode="zeros", p=0.25, min_mid_channels=4, with_ln=True, bn_kwargs=None):
-        super().__init__()
-        self.with_ln = with_ln
-        # check arguments
-        assert 0.0 <= p <= 1.0
-        mid_channels = min(in_channels, max(min_mid_channels, math.ceil(p * in_channels)))
-        if bn_kwargs is None:
-            bn_kwargs = {}
-
-        # pointwise 1
-        self.pw1 = nn.Linear(in_channels, mid_channels)
-        # self.pw1 = torch.nn.Conv2d(
-        #     in_channels=in_channels,
-        #     out_channels=mid_channels,
-        #     kernel_size=(1, 1),
-        #     stride=1,
-        #     padding=0,
-        #     dilation=1,
-        #     groups=1,
-        #     bias=False,
-        # )
-
-        # batchnorm
-        if with_ln:
-            self.ln1 = torch.nn.LayerNorm(mid_channels, **bn_kwargs)
-
-        # pointwise 2
-        self.pw2 = nn.Linear(mid_channels, out_channels)
-        # self.add_module("pw2", torch.nn.Conv2d(
-        #     in_channels=mid_channels,
-        #     out_channels=out_channels,
-        #     kernel_size=(1, 1),
-        #     stride=1,
-        #     padding=0,
-        #     dilation=1,
-        #     groups=1,
-        #     bias=False,
-        # ))
-
-        # batchnorm
-        if with_ln:
-            self.ln2 = torch.nn.LayerNorm(out_channels, **bn_kwargs)
-
-        # depthwise
-        self.dw = torch.nn.Conv2d(
-            in_channels=out_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=out_channels,
-            bias=bias,
-            padding_mode=padding_mode,
-        )
-
-    def forward(self, x):
-        fea = x.permute(0, 2, 3, 1)
-        fea = self.pw1(fea)
-        if self.with_ln:
-            fea = self.ln1(fea)
-        fea = self.pw2(fea)
-        if self.with_ln:
-            fea = self.ln2(fea)
-        fea = self.dw(fea.permute(0, 3, 1, 2))
-        return fea
-
-    def _reg_loss(self):
-        W = self[0].weight[:, :, 0, 0]
-        WWt = torch.mm(W, torch.transpose(W, 0, 1))
-        I = torch.eye(WWt.shape[0], device=WWt.device)
-        return torch.norm(WWt - I, p="fro")
+import Blocks
+import Upsamplers
+from basicsr.utils.registry import ARCH_REGISTRY
 
 
 class ESA(nn.Module):
@@ -377,11 +110,11 @@ class RFDN(nn.Module):
         self.fea_conv = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
         print(conv)
         if conv == 'DepthWiseConv':
-            self.conv = DepthWiseConv
+            self.conv = Blocks.DepthWiseConv
         elif conv == 'BSConvU':
-            self.conv = BSConvU
+            self.conv = Blocks.BSConvU
         elif conv == 'BSConvS':
-            self.conv = BSConvS
+            self.conv = Blocks.BSConvS
         else:
             self.conv = nn.Conv2d
         # RFDB_block_f = functools.partial(RFDB, in_channels=num_feat, conv=self.conv, p=p)
@@ -401,13 +134,13 @@ class RFDN(nn.Module):
 
 
         if upsampler == 'pixelshuffledirect':
-            self.upsampler = PixelShuffleDirect(scale=upscale, num_feat=num_feat, num_out_ch=num_out_ch)
+            self.upsampler = Upsamplers.PixelShuffleDirect(scale=upscale, num_feat=num_feat, num_out_ch=num_out_ch)
         elif upsampler == 'pixelshuffleblock':
-            self.upsampler = PixelShuffleBlcok(in_feat=num_feat, num_feat=num_feat, num_out_ch=num_out_ch)
+            self.upsampler = Upsamplers.PixelShuffleBlcok(in_feat=num_feat, num_feat=num_feat, num_out_ch=num_out_ch)
         elif upsampler == 'nearestconv':
-            self.upsampler = NearestConv(in_ch=num_feat, num_feat=num_feat, num_out_ch=num_out_ch)
+            self.upsampler = Upsamplers.NearestConv(in_ch=num_feat, num_feat=num_feat, num_out_ch=num_out_ch)
         elif upsampler == 'pa':
-            self.upsampler = PA_UP(nf=num_feat, unf=24, out_nc=num_out_ch)
+            self.upsampler = Upsamplers.PA_UP(nf=num_feat, unf=24, out_nc=num_out_ch)
         else:
             raise NotImplementedError(("Check the Upsampeler. None or not support yet"))
 
