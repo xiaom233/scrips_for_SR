@@ -10,8 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import Blocks
-import Upsamplers
+import basicsr.archs.Blocks as Blocks
+import basicsr.archs.Upsamplers as Upsamplers
 from basicsr.utils.registry import ARCH_REGISTRY
 
 
