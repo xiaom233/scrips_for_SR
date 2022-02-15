@@ -131,8 +131,10 @@ class NearestConv(nn.Module):
         return x
 
 
+# 1*1卷积使用nn.Linear实现
 class DepthWiseConv(nn.Module):
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_ch, out_ch, kernel_size=3, stride=1, padding=1,
+                 dilation=1, bias=True, padding_mode="zeros", with_norm=True, bn_kwargs=None):
         super(DepthWiseConv, self).__init__()
         # 也相当于分组为1的分组卷积
         self.depth_conv = nn.Conv2d(in_channels=in_ch,
@@ -141,41 +143,45 @@ class DepthWiseConv(nn.Module):
                                     stride=1,
                                     padding=1,
                                     groups=in_ch)
-        self.point_conv = nn.Conv2d(in_channels=in_ch,
-                                    out_channels=out_ch,
-                                    kernel_size=1,
-                                    stride=1,
-                                    padding=0,
-                                    groups=1)
+        self.point_conv = nn.Linear(in_ch, out_ch)
+        # self.point_conv = nn.Conv2d(in_channels=in_ch,
+        #                             out_channels=out_ch,
+        #                             kernel_size=1,
+        #                             stride=1,
+        #                             padding=0,
+        #                             groups=1)
 
     def forward(self, input):
         out = self.depth_conv(input)
+        out = out.permute(0, 2, 3, 1)
         out = self.point_conv(out)
+        out = out.permute(0, 3, 1, 2)
         return out
 
 
 class BSConvU(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1,
-                 dilation=1, bias=True, padding_mode="zeros", with_norm=True, bn_kwargs=None):
+                 dilation=1, bias=True, padding_mode="zeros", with_ln=True, bn_kwargs=None):
         super().__init__()
-        self.with_norm = with_norm
+        self.with_ln = with_ln
         # check arguments
         if bn_kwargs is None:
             bn_kwargs = {}
 
         # pointwise
-        self.pw=torch.nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=(1, 1),
-                stride=1,
-                padding=0,
-                dilation=1,
-                groups=1,
-                bias=False,
-        )
+        self.pw = nn.Linear(in_channels, out_channels)
+        # self.pw=torch.nn.Conv2d(
+        #         in_channels=in_channels,
+        #         out_channels=out_channels,
+        #         kernel_size=(1, 1),
+        #         stride=1,
+        #         padding=0,
+        #         dilation=1,
+        #         groups=1,
+        #         bias=False,
+        # )
         # batchnorm
-        if with_norm:
+        if with_ln:
             self.ln = torch.nn.LayerNorm(out_channels, **bn_kwargs)
 
         # depthwise
@@ -192,18 +198,19 @@ class BSConvU(torch.nn.Module):
         )
 
     def forward(self, fea):
+        fea = fea.permute(0, 2, 3, 1)
         fea = self.pw(fea)
-        if self.with_norm:
-            fea = self.ln(fea.permute(0, 2, 3, 1))
+        if self.with_ln:
+            fea = self.ln(fea)
         fea = self.dw(fea.permute(0, 3, 1, 2))
         return fea
 
 
-class BSConvS(torch.nn.Sequential):
+class BSConvS(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, bias=True,
-                 padding_mode="zeros", p=0.25, min_mid_channels=4, with_ln=False, bn_kwargs=None):
+                 padding_mode="zeros", p=0.25, min_mid_channels=4, with_ln=True, bn_kwargs=None):
         super().__init__()
-
+        self.with_ln = with_ln
         # check arguments
         assert 0.0 <= p <= 1.0
         mid_channels = min(in_channels, max(min_mid_channels, math.ceil(p * in_channels)))
@@ -211,39 +218,41 @@ class BSConvS(torch.nn.Sequential):
             bn_kwargs = {}
 
         # pointwise 1
-        self.add_module("pw1", torch.nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=mid_channels,
-            kernel_size=(1, 1),
-            stride=1,
-            padding=0,
-            dilation=1,
-            groups=1,
-            bias=False,
-        ))
+        self.pw1 = nn.Linear(in_channels, mid_channels)
+        # self.pw1 = torch.nn.Conv2d(
+        #     in_channels=in_channels,
+        #     out_channels=mid_channels,
+        #     kernel_size=(1, 1),
+        #     stride=1,
+        #     padding=0,
+        #     dilation=1,
+        #     groups=1,
+        #     bias=False,
+        # )
 
         # batchnorm
         if with_ln:
-            self.add_module("ln1", torch.nn.LayerNorm(out_channels, **bn_kwargs))
+            self.ln1 = torch.nn.LayerNorm(mid_channels, **bn_kwargs)
 
         # pointwise 2
-        self.add_module("pw2", torch.nn.Conv2d(
-            in_channels=mid_channels,
-            out_channels=out_channels,
-            kernel_size=(1, 1),
-            stride=1,
-            padding=0,
-            dilation=1,
-            groups=1,
-            bias=False,
-        ))
+        self.pw2 = nn.Linear(mid_channels, out_channels)
+        # self.add_module("pw2", torch.nn.Conv2d(
+        #     in_channels=mid_channels,
+        #     out_channels=out_channels,
+        #     kernel_size=(1, 1),
+        #     stride=1,
+        #     padding=0,
+        #     dilation=1,
+        #     groups=1,
+        #     bias=False,
+        # ))
 
         # batchnorm
         if with_ln:
-            self.add_module("ln2", torch.nn.LayerNorm(out_channels, **bn_kwargs))
+            self.ln2 = torch.nn.LayerNorm(out_channels, **bn_kwargs)
 
         # depthwise
-        self.add_module("dw", torch.nn.Conv2d(
+        self.dw = torch.nn.Conv2d(
             in_channels=out_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -253,7 +262,18 @@ class BSConvS(torch.nn.Sequential):
             groups=out_channels,
             bias=bias,
             padding_mode=padding_mode,
-        ))
+        )
+
+    def forward(self, x):
+        fea = x.permute(0, 2, 3, 1)
+        fea = self.pw1(fea)
+        if self.with_ln:
+            fea = self.ln1(fea)
+        fea = self.pw2(fea)
+        if self.with_ln:
+            fea = self.ln2(fea)
+        fea = self.dw(fea.permute(0, 3, 1, 2))
+        return fea
 
     def _reg_loss(self):
         W = self[0].weight[:, :, 0, 0]
@@ -269,30 +289,31 @@ class ESA(nn.Module):
         BSConvS_kwargs = {}
         if conv.__name__ == 'BSConvS':
             BSConvS_kwargs = {'p': p}
-        self.conv1 = nn.Conv2d(num_feat, f, 1, 1, 0)
-        self.conv_f = nn.Conv2d(f, f, 1, 1, 0)
+        self.conv1 = nn.Linear(num_feat, f)
+        self.conv_f = nn.Linear(f, f)
         self.maxPooling = nn.MaxPool2d(kernel_size=7, stride=3)
         self.conv_max = conv(f, f, kernel_size=3, **BSConvS_kwargs)
         self.conv2 = nn.Conv2d(f, f, 3, 2, 0)
         self.conv3 = conv(f, f, kernel_size=3, **BSConvS_kwargs)
         self.conv3_ = conv(f, f, kernel_size=3, **BSConvS_kwargs)
-        self.conv4 = nn.Conv2d(f, num_feat, 1, 1, 0)
+        self.conv4 = nn.Linear(f, num_feat)
         self.sigmoid = nn.Sigmoid()
         self.GELU = nn.GELU()
 
-    def forward(self, x):
+    def forward(self, input):
+        x = input.permute(0, 2, 3, 1)
         c1_ = (self.conv1(x))
-        c1 = self.conv2(c1_)
+        c1 = self.conv2(c1_.permute(0, 3, 1, 2))
         v_max = self.maxPooling(c1)
         v_range = self.GELU(self.conv_max(v_max))
         c3 = self.GELU(self.conv3(v_range))
         c3 = self.conv3_(c3)
-        c3 = F.interpolate(c3, (x.size(2), x.size(3)), mode='bilinear', align_corners=False)
+        c3 = F.interpolate(c3, (input.size(2), input.size(3)), mode='bilinear', align_corners=False)
         cf = self.conv_f(c1_)
-        c4 = self.conv4(c3 + cf)
-        m = self.sigmoid(c4)
+        c4 = self.conv4((c3.permute(0, 2, 3, 1) + cf))
+        m = self.sigmoid(c4.permute(0, 3, 1, 2))
 
-        return x * m
+        return input * m
 
 
 class RFDB(nn.Module):
@@ -305,37 +326,38 @@ class RFDB(nn.Module):
         self.dc = self.distilled_channels = in_channels // 2
         self.rc = self.remaining_channels = in_channels
 
-        self.c1_d = nn.Conv2d(in_channels, self.dc, 1, 1, 0)
+        self.c1_d = nn.Linear(in_channels, self.dc)
         self.c1_r = conv(in_channels, self.rc, kernel_size=3,  **kwargs)
-        self.c2_d = nn.Conv2d(self.remaining_channels, self.dc, 1, 1, 0)
+        self.c2_d = nn.Linear(self.remaining_channels, self.dc)
         self.c2_r = conv(self.remaining_channels, self.rc, kernel_size=3, **kwargs)
-        self.c3_d = nn.Conv2d(self.remaining_channels, self.dc, 1, 1, 0)
+        self.c3_d = nn.Linear(self.remaining_channels, self.dc)
         self.c3_r = conv(self.remaining_channels, self.rc, kernel_size=3, **kwargs)
 
         self.c4 = conv(self.remaining_channels, self.dc, kernel_size=3, **kwargs)
         self.act = nn.GELU()
 
-        self.c5 = nn.Conv2d(self.dc * 4, in_channels, 1, 1, 0)
+        self.c5 = nn.Linear(self.dc * 4, in_channels)
         self.esa = ESA(in_channels, conv)
 
     def forward(self, input):
 
-        distilled_c1 = self.act(self.c1_d(input))
+        distilled_c1 = self.act(self.c1_d(input.permute(0, 2, 3, 1)))
         r_c1 = (self.c1_r(input))
         r_c1 = self.act(r_c1 + input)
 
-        distilled_c2 = self.act(self.c2_d(r_c1))
+        distilled_c2 = self.act(self.c2_d(r_c1.permute(0, 2, 3, 1)))
         r_c2 = (self.c2_r(r_c1))
         r_c2 = self.act(r_c2 + r_c1)
 
-        distilled_c3 = self.act(self.c3_d(r_c2))
+        distilled_c3 = self.act(self.c3_d(r_c2.permute(0, 2, 3, 1)))
         r_c3 = (self.c3_r(r_c2))
         r_c3 = self.act(r_c3 + r_c2)
 
         r_c4 = self.act(self.c4(r_c3))
 
-        out = torch.cat([distilled_c1, distilled_c2, distilled_c3, r_c4], dim=1)
-        out_fused = self.esa(self.c5(out))
+        out = torch.cat([distilled_c1, distilled_c2, distilled_c3, r_c4.permute(0, 2, 3, 1)], dim=3)
+        out = self.c5(out).permute(0, 3, 1, 2)
+        out_fused = self.esa(out)
 
         return out_fused
 
@@ -350,7 +372,7 @@ def make_layer(block, n_layers):
 @ARCH_REGISTRY.register()
 class RFDN(nn.Module):
     def __init__(self, num_in_ch=3, num_feat=50, num_block=4, num_out_ch=3, upscale=4,
-                 conv='DepthWiseConv', upsampler= 'pixelshuffledirect',p=0.25):
+                 conv='DepthWiseConv', upsampler= 'pixelshuffledirect', p=0.25):
         super(RFDN, self).__init__()
         self.fea_conv = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
         print(conv)
@@ -370,7 +392,7 @@ class RFDN(nn.Module):
         self.B4 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
         self.B5 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
         self.B6 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
-        self.B7 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
+        # self.B7 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
 
         self.c1 = nn.Conv2d(num_feat * num_block, num_feat, 1, 1, 0)
         self.GELU = nn.GELU()
@@ -397,9 +419,9 @@ class RFDN(nn.Module):
         out_B4 = self.B4(out_B3)
         out_B5 = self.B5(out_B4)
         out_B6 = self.B6(out_B5)
-        out_B7 = self.B7(out_B6)
+        # out_B7 = self.B7(out_B6)
 
-        out_B = self.c1(torch.cat([out_B1, out_B2, out_B3, out_B4, out_B5, out_B6, out_B7], dim=1))
+        out_B = self.c1(torch.cat([out_B1, out_B2, out_B3, out_B4, out_B5, out_B6], dim=1))
         out_B = self.GELU(out_B)
 
         out_lr = self.c2(out_B) + out_fea
