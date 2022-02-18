@@ -71,7 +71,7 @@ class RFDB(nn.Module):
 
         self.c5 = nn.Linear(self.dc * 4, in_channels)
         self.esa = ESA(in_channels, conv)
-        self.conv_out = conv(in_channels, out_channels, kernel_size=3, **kwargs)
+        self.conv_out = nn.Linear(in_channels, out_channels)
 
     def forward(self, input):
 
@@ -92,9 +92,9 @@ class RFDB(nn.Module):
         out = torch.cat([distilled_c1, distilled_c2, distilled_c3, r_c4.permute(0, 2, 3, 1)], dim=3)
         out = self.c5(out).permute(0, 3, 1, 2)
         out_fused = self.esa(out)
-        out_fused = self.conv_out(out_fused)
+        out_fused = self.conv_out(out_fused.permute(0, 2, 3, 1))
 
-        return out_fused
+        return out_fused.permute(0, 3, 1, 2)
 
 
 def make_layer(block, n_layers):
