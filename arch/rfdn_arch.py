@@ -50,7 +50,7 @@ class ESA(nn.Module):
 
 
 class RFDB(nn.Module):
-    def __init__(self, in_channels, distillation_rate=0.25, conv=nn.Conv2d, p=0.25):
+    def __init__(self, in_channels, out_channels, distillation_rate=0.25, conv=nn.Conv2d, p=0.25):
         super(RFDB, self).__init__()
         kwargs = {'padding': 1}
         if conv.__name__ == 'BSConvS':
@@ -71,6 +71,7 @@ class RFDB(nn.Module):
 
         self.c5 = nn.Linear(self.dc * 4, in_channels)
         self.esa = ESA(in_channels, conv)
+        self.conv_out = conv(in_channels, out_channels, kernel_size=3, **kwargs)
 
     def forward(self, input):
 
@@ -91,6 +92,7 @@ class RFDB(nn.Module):
         out = torch.cat([distilled_c1, distilled_c2, distilled_c3, r_c4.permute(0, 2, 3, 1)], dim=3)
         out = self.c5(out).permute(0, 3, 1, 2)
         out_fused = self.esa(out)
+        out_fused = self.conv_out(out_fused)
 
         return out_fused
 
@@ -123,12 +125,12 @@ class RFDN(nn.Module):
 
         # RFDB_block_f = functools.partial(RFDB, in_channels=num_feat, conv=self.conv, p=p)
         # RFDB_trunk = make_layer(RFDB_block_f, num_block)
-        self.B1 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
-        self.B2 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
-        self.B3 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
-        self.B4 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
-        self.B5 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
-        self.B6 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
+        self.B1 = RFDB(in_channels=num_feat, out_channels=num_feat, conv=self.conv, p=p)
+        self.B2 = RFDB(in_channels=num_feat, out_channels=num_feat, conv=self.conv, p=p)
+        self.B3 = RFDB(in_channels=num_feat, out_channels=num_feat, conv=self.conv, p=p)
+        self.B4 = RFDB(in_channels=num_feat, out_channels=num_feat, conv=self.conv, p=p)
+        self.B5 = RFDB(in_channels=num_feat, out_channels=num_feat, conv=self.conv, p=p)
+        self.B6 = RFDB(in_channels=num_feat, out_channels=num_feat, conv=self.conv, p=p)
         # self.B7 = RFDB(in_channels=num_feat, conv=self.conv, p=p)
 
         self.c1 = nn.Linear(num_feat * num_block, num_feat)
@@ -162,6 +164,7 @@ class RFDN(nn.Module):
         out_B = self.GELU(out_B.permute(0, 3, 1, 2))
         # print(out_B.shape)
         out_lr = self.c2(out_B) + out_fea
+
 
         # output = self.c3(out_lr)
         output = self.upsampler(out_lr)
