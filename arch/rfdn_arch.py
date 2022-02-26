@@ -94,7 +94,7 @@ class RFDB(nn.Module):
         out_fused = self.esa(out)
         out_fused = self.conv_out(out_fused.permute(0, 2, 3, 1))
 
-        return out_fused.permute(0, 3, 1, 2)
+        return out_fused.permute(0, 3, 1, 2) + input
 
 
 def make_layer(block, n_layers):
