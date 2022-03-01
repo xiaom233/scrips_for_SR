@@ -44,7 +44,7 @@ class DepthWiseConv(nn.Module):
 
 class BSConvU(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1,
-                 dilation=1, bias=True, padding_mode="zeros", with_ln=True, bn_kwargs=None):
+                 dilation=1, bias=True, padding_mode="zeros", with_ln=False, bn_kwargs=None):
         super().__init__()
         self.with_ln = with_ln
         # check arguments
