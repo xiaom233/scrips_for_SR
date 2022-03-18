@@ -120,3 +120,24 @@ class NearestConv(nn.Module):
         x = self.lrelu(self.conv_up2(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
         x = self.conv_last(self.lrelu(self.conv_hr(x)))
         return x
+
+
+class NearestConvDropout(nn.Module):
+    def __init__(self, in_ch, num_feat, num_out_ch, p=0.7):
+        super(NearestConvDropout, self).__init__()
+        self.conv_before_upsample = nn.Sequential(
+            nn.Conv2d(in_ch, num_feat, 3, 1, 1), nn.LeakyReLU(inplace=True))
+        self.conv_up1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+        self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+        self.conv_hr = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+        self.dropout = nn.Dropout(p=p)
+        self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
+        self.act = nn.GELU()
+
+    def forward(self, x):
+        x = self.conv_before_upsample(x)
+        x = self.act(self.conv_up1(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
+        x = self.act(self.conv_up2(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
+        x = self.dropout(x)
+        x = self.conv_last(self.lrelu(self.conv_hr(x)))
+        return x
