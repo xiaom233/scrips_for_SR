@@ -139,5 +139,5 @@ class NearestConvDropout(nn.Module):
         x = self.act(self.conv_up1(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
         x = self.act(self.conv_up2(torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')))
         x = self.dropout(x)
-        x = self.conv_last(self.lrelu(self.conv_hr(x)))
+        x = self.conv_last(self.act(self.conv_hr(x)))
         return x
