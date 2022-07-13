@@ -291,18 +291,18 @@ class WindowAttention(nn.Module):
     def extra_repr(self) -> str:
         return f'dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads}'
 
-    def flops(self, n):
-        # calculate flops for 1 window with token length of n
-        flops = 0
-        # qkv = self.qkv(x)
-        flops += n * self.dim * 3 * self.dim
-        # attn = (q @ k.transpose(-2, -1))
-        flops += self.num_heads * n * (self.dim // self.num_heads) * n
-        #  x = (attn @ v)
-        flops += self.num_heads * n * n * (self.dim // self.num_heads)
-        # x = self.proj(x)
-        flops += n * self.dim * self.dim
-        return flops
+    # def flops(self, n):
+    #     # calculate flops for 1 window with token length of n
+    #     flops = 0
+    #     # qkv = self.qkv(x)
+    #     flops += n * self.dim * 3 * self.dim
+    #     # attn = (q @ k.transpose(-2, -1))
+    #     flops += self.num_heads * n * (self.dim // self.num_heads) * n
+    #     #  x = (attn @ v)
+    #     flops += self.num_heads * n * n * (self.dim // self.num_heads)
+    #     # x = self.proj(x)
+    #     flops += n * self.dim * self.dim
+    #     return flops
 
 
 class SwinTransformerBlock(nn.Module):
@@ -439,19 +439,19 @@ class SwinTransformerBlock(nn.Module):
         return (f'dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, '
                 f'window_size={self.window_size}, shift_size={self.shift_size}, mlp_ratio={self.mlp_ratio}')
 
-    def flops(self):
-        flops = 0
-        h, w = self.input_resolution
-        # norm1
-        flops += self.dim * h * w
-        # W-MSA/SW-MSA
-        nw = h * w / self.window_size / self.window_size
-        flops += nw * self.attn.flops(self.window_size * self.window_size)
-        # mlp
-        flops += 2 * h * w * self.dim * self.dim * self.mlp_ratio
-        # norm2
-        flops += self.dim * h * w
-        return flops
+    # def flops(self):
+    #     flops = 0
+    #     h, w = self.input_resolution
+    #     # norm1
+    #     flops += self.dim * h * w
+    #     # W-MSA/SW-MSA
+    #     nw = h * w / self.window_size / self.window_size
+    #     flops += nw * self.attn.flops(self.window_size * self.window_size)
+    #     # mlp
+    #     flops += 2 * h * w * self.dim * self.dim * self.mlp_ratio
+    #     # norm2
+    #     flops += self.dim * h * w
+    #     return flops
 
 
 class PatchMerging(nn.Module):
@@ -495,11 +495,11 @@ class PatchMerging(nn.Module):
     def extra_repr(self) -> str:
         return f'input_resolution={self.input_resolution}, dim={self.dim}'
 
-    def flops(self):
-        h, w = self.input_resolution
-        flops = h * w * self.dim
-        flops += (h // 2) * (w // 2) * 4 * self.dim * 2 * self.dim
-        return flops
+    # def flops(self):
+    #     h, w = self.input_resolution
+    #     flops = h * w * self.dim
+    #     flops += (h // 2) * (w // 2) * 4 * self.dim * 2 * self.dim
+    #     return flops
 
 
 class BasicLayer(nn.Module):
@@ -579,13 +579,13 @@ class BasicLayer(nn.Module):
     def extra_repr(self) -> str:
         return f'dim={self.dim}, input_resolution={self.input_resolution}, depth={self.depth}'
 
-    def flops(self):
-        flops = 0
-        for blk in self.blocks:
-            flops += blk.flops()
-        if self.downsample is not None:
-            flops += self.downsample.flops()
-        return flops
+    # def flops(self):
+    #     flops = 0
+    #     for blk in self.blocks:
+    #         flops += blk.flops()
+    #     if self.downsample is not None:
+    #         flops += self.downsample.flops()
+    #     return flops
 
 
 class RSTB(nn.Module):
@@ -667,15 +667,15 @@ class RSTB(nn.Module):
     def forward(self, x, x_size):
         return self.patch_embed(self.conv(self.patch_unembed(self.residual_group(x, x_size), x_size))) + x
 
-    def flops(self):
-        flops = 0
-        flops += self.residual_group.flops()
-        h, w = self.input_resolution
-        flops += h * w * self.dim * self.dim * 9
-        flops += self.patch_embed.flops()
-        flops += self.patch_unembed.flops()
-
-        return flops
+    # def flops(self):
+    #     flops = 0
+    #     flops += self.residual_group.flops()
+    #     h, w = self.input_resolution
+    #     flops += h * w * self.dim * self.dim * 9
+    #     flops += self.patch_embed.flops()
+    #     flops += self.patch_unembed.flops()
+    #
+    #     return flops
 
 
 class PatchEmbed(nn.Module):
@@ -712,12 +712,12 @@ class PatchEmbed(nn.Module):
             x = self.norm(x)
         return x
 
-    def flops(self):
-        flops = 0
-        h, w = self.img_size
-        if self.norm is not None:
-            flops += h * w * self.embed_dim
-        return flops
+    # def flops(self):
+    #     flops = 0
+    #     h, w = self.img_size
+    #     if self.norm is not None:
+    #         flops += h * w * self.embed_dim
+    #     return flops
 
 
 class PatchUnEmbed(nn.Module):
@@ -747,9 +747,9 @@ class PatchUnEmbed(nn.Module):
         x = x.transpose(1, 2).view(x.shape[0], self.embed_dim, x_size[0], x_size[1])  # b Ph*Pw c
         return x
 
-    def flops(self):
-        flops = 0
-        return flops
+    # def flops(self):
+    #     flops = 0
+    #     return flops
 
 
 class Upsample(nn.Sequential):
@@ -789,10 +789,10 @@ class UpsampleOneStep(nn.Sequential):
         m.append(nn.PixelShuffle(scale))
         super(UpsampleOneStep, self).__init__(*m)
 
-    def flops(self):
-        h, w = self.input_resolution
-        flops = h * w * self.num_feat * 3 * 9
-        return flops
+    # def flops(self):
+    #     h, w = self.input_resolution
+    #     flops = h * w * self.num_feat * 3 * 9
+    #     return flops
 
 
 @ARCH_REGISTRY.register()
@@ -1025,16 +1025,16 @@ class SwinIRLinear(nn.Module):
 
         return x
 
-    def flops(self):
-        flops = 0
-        h, w = self.patches_resolution
-        flops += h * w * 3 * self.embed_dim * 9
-        flops += self.patch_embed.flops()
-        for layer in self.layers:
-            flops += layer.flops()
-        flops += h * w * 3 * self.embed_dim * self.embed_dim
-        flops += self.upsample.flops()
-        return flops
+    # def flops(self):
+    #     flops = 0
+    #     h, w = self.patches_resolution
+    #     flops += h * w * 3 * self.embed_dim * 9
+    #     flops += self.patch_embed.flops()
+    #     for layer in self.layers:
+    #         flops += layer.flops()
+    #     flops += h * w * 3 * self.embed_dim * self.embed_dim
+    #     flops += self.upsample.flops()
+    #     return flops
 
 
 if __name__ == '__main__':
@@ -1042,7 +1042,7 @@ if __name__ == '__main__':
     window_size = 8
     height = (1024 // upscale // window_size + 1) * window_size
     width = (720 // upscale // window_size + 1) * window_size
-    model = SwinIR(
+    model = SwinIRLinear(
         upscale=2,
         img_size=(height, width),
         window_size=window_size,

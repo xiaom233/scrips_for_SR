@@ -28,18 +28,18 @@ class PA(nn.Module):
 
 
 class PA_UP(nn.Module):
-    def __init__(self, nf, unf, out_nc, scale=4):
+    def __init__(self, nf, unf, out_nc, scale=4, conv=nn.Conv2d):
         super(PA_UP, self).__init__()
-        self.upconv1 = nn.Conv2d(nf, unf, 3, 1, 1, bias=True)
+        self.upconv1 = conv(nf, unf, 3, 1, 1, bias=True)
         self.att1 = PA(unf)
-        self.HRconv1 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
+        self.HRconv1 = conv(unf, unf, 3, 1, 1, bias=True)
 
         if scale == 4:
-            self.upconv2 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
+            self.upconv2 = conv(unf, unf, 3, 1, 1, bias=True)
             self.att2 = PA(unf)
-            self.HRconv2 = nn.Conv2d(unf, unf, 3, 1, 1, bias=True)
+            self.HRconv2 = conv(unf, unf, 3, 1, 1, bias=True)
 
-        self.conv_last = nn.Conv2d(unf, out_nc, 3, 1, 1, bias=True)
+        self.conv_last = conv(unf, out_nc, 3, 1, 1, bias=True)
         self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
 
     def forward(self, fea):
@@ -104,14 +104,14 @@ class PixelShuffleBlcok(nn.Module):
 
 
 class NearestConv(nn.Module):
-    def __init__(self, in_ch, num_feat, num_out_ch):
+    def __init__(self, in_ch, num_feat, num_out_ch, conv=nn.Conv2d):
         super(NearestConv, self).__init__()
         self.conv_before_upsample = nn.Sequential(
-            nn.Conv2d(in_ch, num_feat, 3, 1, 1), nn.LeakyReLU(inplace=True))
-        self.conv_up1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_hr = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
+            conv(in_ch, num_feat, 3, 1, 1), nn.LeakyReLU(inplace=True))
+        self.conv_up1 = conv(num_feat, num_feat, 3, 1, 1)
+        self.conv_up2 = conv(num_feat, num_feat, 3, 1, 1)
+        self.conv_hr = conv(num_feat, num_feat, 3, 1, 1)
+        self.conv_last = conv(num_feat, num_out_ch, 3, 1, 1)
         self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
 
     def forward(self, x):
